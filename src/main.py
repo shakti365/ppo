@@ -6,7 +6,6 @@ from datetime import datetime
 import tensorflow as tf
 
 from ppo import PPOClipped
-from replay_buffer import ReplayBuffer
 from env import ContinuousCartPoleEnv
 
 tf.keras.backend.set_floatx('float64')
@@ -24,7 +23,7 @@ parser.add_argument('--verbose', type=bool, default=False,
                     help='log execution details')
 parser.add_argument('--batch_size', type=int, default=64,
                     help='minibatch sample size for training')
-parser.add_argument('--epochs', type=int, default=1,
+parser.add_argument('--epochs', type=int, default=10,
                     help='number of epochs to run backprop in an episode')
 parser.add_argument('--model_path', type=str, default='../data/models/',
                     help='path to save model')
@@ -58,10 +57,12 @@ if __name__=='__main__':
     action_space = env.action_space.shape[0]
 
     # Initialize policy and value function parameters.
+    ppo = PPOClipped(writer, action_space)
 
     # Reset global tracking variables
 
     # Start epoch.
+    for epoch in range(args.epochs):
 
         # Reset epoch tracking variables.
 
@@ -83,6 +84,7 @@ if __name__=='__main__':
         # then do early stoppping.
 
         # Log epoch summary.
+        logging.info(f"Epoch: {epoch}")
 
         # Save model.
 
