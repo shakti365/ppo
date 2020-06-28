@@ -64,27 +64,45 @@ if __name__=='__main__':
     # Start epoch.
     for epoch in range(args.epochs):
 
-        # Reset epoch tracking variables.
+        # Reset epoch variables.
+        current_state = env.reset()
+        done = False
+        episode_reward = 0.0
+        transitions = []
 
-        # Start parallel actors for 1 episode.
+        # Run an episode.
+        while not done:
 
-            # Reset episode tracking variables.
+            if args.render:
+                env.render()
 
-            # Run policy in environment and return gradients.
+            # sample action from policy
+            current_state_ = np.array(current_state, ndmin=2).reshape(1, -1)
+            action, log_pi = ppo.policy(current_state_)
 
-            # Log episode summary.
+            action_ = action.numpy()[0]
+            log_pi_ = log_pi.numpy()[0]
 
-        # Update policy parameter.
-        # TODO: Stochastic or Minibatch?
+            # Execute action, observe next state and reward
+            next_state, reward, done, _ = env.step(action_)
+            episode_reward += reward
+            transitions.append([current_state_, action_, log_pi_, reward,
+                                next_state])
 
-        # Update value function parameter.
-        # TODO: Stochastic or Minibatch?
+            current_state = next_state
+
+        print(f"Episode Reward: {episode_reward}")
+
+        # Update policy and value function parameter.
+        policy_loss, value_loss = ppo.update(transitions)
 
         # If the KL divergence between the old and new policy crosses threshold
         # then do early stoppping.
 
         # Log epoch summary.
-        logging.info(f"Epoch: {epoch}")
+        print(f"Epoch: {epoch}")
+        print(f"Policy Loss: {policy_loss}")
+        print(f"Value Loss: {value_loss}")
 
         # Save model.
 

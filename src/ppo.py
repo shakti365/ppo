@@ -18,7 +18,8 @@ class Actor(Model):
         self.hidden_layers = [layers.Dense(layer, activation=tf.nn.relu) for layer in hidden_dims]
         self.mean_layer = layers.Dense(self.output_dim)
         # Standard deviation doesn't depend on state
-        self.log_stddev = tf.Variable(initial_value=0.0, trainable=True)
+        self.log_stddev = tf.Variable(initial_value=0.0, trainable=True,
+                                      dtype=tf.float64)
 
     def call(self, state):
         # Pass input through all hidden layers
@@ -90,7 +91,8 @@ class PPOClipped:
                  policy_hidden_dims=[64, 64],
                  value_hidden_dims=[64, 64],
                  learning_rate=1e-4,
-                 gamma=0.99):
+                 gamma=0.99,
+                 epsilon=0.2):
         """Implementation of PPO with Clipped object"""
         self.policy = Actor(action_dim, policy_hidden_dims)
         self.value = Critic(value_hidden_dims)
@@ -98,9 +100,60 @@ class PPOClipped:
         self.writer = writer
         self.learning_rate = learning_rate
         self.gamma = gamma
+        self.epsilon = epsilon
 
         self.policy_optimizer = tf.keras.optimizers.Adam(learning_rate)
         self.value_optimizer = tf.keras.optimizers.Adam(learning_rate)
 
+    def update(self, transitions):
+        """Does a backprop on policy and value networks"""
 
+        with tf.GradientTape() as tape1:
+            tape1.watch(self.policy.trainable_variables)
 
+            with tf.GradientTape(watch_accessed_variables=True) as tape2:
+                tape2.watch(self.value.trainable_variables)
+
+                R = 0.0
+                policy_loss = 0.0
+                value_loss = 0.0
+                num_samples = 0.0
+                for transition in reversed(transitions):
+                    current_state, action, log_pi_old, reward, next_state = transition 
+                    R = self.gamma * R + reward
+                    # TODO: try other advantage estimates - GAE
+                    V_s = self.value(current_state)
+                    advantage = R - V_s
+
+                    # Compute policy loss
+                    _, log_pi = self.policy(current_state)
+                    is_ratio = tf.exp(log_pi - log_pi_old)
+                    print(log_pi, log_pi_old)
+
+                    unclipped = is_ratio * advantage
+                    clipped = tf.cond(advantage < 0,
+                                      lambda: tf.multiply(1-self.epsilon, advantage),
+                                      lambda: tf.multiply(1+self.epsilon, advantage))
+
+                    policy_loss -= tf.math.minimum(clipped, unclipped)
+                    value_loss += tf.pow(V_s - R, 2)
+                    num_samples += 1
+
+                value_objective = 1/num_samples * value_loss
+
+            policy_objective = 1/num_samples * policy_loss
+
+        policy_vars = self.policy.trainable_variables
+        policy_grads = tape1.gradient(is_ratio, policy_vars)
+        print([tf.reduce_sum(grad) for grad in policy_grads])
+        self.policy_optimizer.apply_gradients(zip(policy_grads, policy_vars))
+
+        value_vars = self.value.trainable_variables
+        value_grads = tape2.gradient(value_objective, value_vars)
+        self.value_optimizer.apply_gradients(zip(value_grads, value_vars))
+
+        return policy_loss, value_loss
+
+    def copy_weights(self):
+        """Update policy"""
+        pass
