@@ -21,7 +21,7 @@ class Actor(Model):
         self.log_stddev = tf.Variable(initial_value=0.0, trainable=True,
                                       dtype=tf.float64)
 
-    def call(self, state):
+    def call(self, state, action=None):
         # Pass input through all hidden layers
         inp = state
         for layer in self.hidden_layers:
@@ -37,14 +37,14 @@ class Actor(Model):
         # the policy network. First, sample from a Normal distribution of
         # sample size as the action and multiply it with stdev
         dist = tfp.distributions.Normal(mu, sigma)
-        action = dist.sample()
+
+        if action is None:
+            action = dist.sample()
 
         # Calculate log probability of the action
         log_pi = dist.log_prob(action)
 
-        # TODO: use tanh squashing trick as in SAC if required
-
-        return action, log_pi
+        return action, log_pi, mu, sigma
 
     @property
     def trainable_variables(self):
@@ -108,52 +108,48 @@ class PPOClipped:
     def update(self, transitions):
         """Does a backprop on policy and value networks"""
 
-        with tf.GradientTape() as tape1:
-            tape1.watch(self.policy.trainable_variables)
+        with tf.GradientTape(watch_accessed_variables=True, persistent=True) as tape:
 
-            with tf.GradientTape(watch_accessed_variables=True) as tape2:
-                tape2.watch(self.value.trainable_variables)
+            R = 0.0
+            policy_loss = 0.0
+            value_loss = 0.0
+            num_samples = 0.0
+            for transition in reversed(transitions):
+                current_state, action, log_pi_old, _, _, reward, next_state = transition
+                R = self.gamma * R + reward
+                # TODO: try other advantage estimates - GAE
+                V_s = self.value(current_state)
+                advantage = R - V_s
 
-                R = 0.0
-                policy_loss = 0.0
-                value_loss = 0.0
-                num_samples = 0.0
-                for transition in reversed(transitions):
-                    current_state, action, log_pi_old, reward, next_state = transition 
-                    R = self.gamma * R + reward
-                    # TODO: try other advantage estimates - GAE
-                    V_s = self.value(current_state)
-                    advantage = R - V_s
+                # Compute policy loss
+                _, log_pi, _, _ = self.policy(current_state, action)
 
-                    # Compute policy loss
-                    _, log_pi = self.policy(current_state)
-                    is_ratio = tf.exp(log_pi - log_pi_old)
+                is_ratio = tf.exp(log_pi - log_pi_old)
+
+                if is_ratio.numpy() != 1:
                     print(log_pi, log_pi_old)
 
-                    unclipped = is_ratio * advantage
-                    clipped = tf.cond(advantage < 0,
-                                      lambda: tf.multiply(1-self.epsilon, advantage),
-                                      lambda: tf.multiply(1+self.epsilon, advantage))
+                unclipped = is_ratio * advantage
+                clipped = tf.cond(advantage < 0,
+                                  lambda: tf.multiply(1-self.epsilon, advantage),
+                                  lambda: tf.multiply(1+self.epsilon, advantage))
 
-                    policy_loss -= tf.math.minimum(clipped, unclipped)
-                    value_loss += tf.pow(V_s - R, 2)
-                    num_samples += 1
+                policy_loss += tf.math.minimum(clipped, unclipped)
+                value_loss += tf.pow(V_s - R, 2)
+                num_samples += 1
 
-                value_objective = 1/num_samples * value_loss
-
-            policy_objective = 1/num_samples * policy_loss
+            value_objective = (1/num_samples) * value_loss
+            policy_objective = (1/num_samples) * tf.math.negative(policy_loss)
 
         policy_vars = self.policy.trainable_variables
-        policy_grads = tape1.gradient(is_ratio, policy_vars)
+        policy_grads = tape.gradient(is_ratio, policy_vars)
         print([tf.reduce_sum(grad) for grad in policy_grads])
         self.policy_optimizer.apply_gradients(zip(policy_grads, policy_vars))
 
         value_vars = self.value.trainable_variables
-        value_grads = tape2.gradient(value_objective, value_vars)
+        value_grads = tape.gradient(value_objective, value_vars)
+        print([tf.reduce_sum(grad) for grad in value_grads])
         self.value_optimizer.apply_gradients(zip(value_grads, value_vars))
 
         return policy_loss, value_loss
 
-    def copy_weights(self):
-        """Update policy"""
-        pass

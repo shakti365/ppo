@@ -12,7 +12,7 @@ tf.keras.backend.set_floatx('float64')
 
 logging.basicConfig(level='INFO')
 
-parser = argparse.ArgumentParser(description='SAC')
+parser = argparse.ArgumentParser(description='PPO')
 parser.add_argument('--seed', type=int, default=42,
                     help='random seed')
 parser.add_argument('--env_name', type=str, default='MountainCarContinuous-v0',
@@ -23,7 +23,7 @@ parser.add_argument('--verbose', type=bool, default=False,
                     help='log execution details')
 parser.add_argument('--batch_size', type=int, default=64,
                     help='minibatch sample size for training')
-parser.add_argument('--epochs', type=int, default=10,
+parser.add_argument('--epochs', type=int, default=100,
                     help='number of epochs to run backprop in an episode')
 parser.add_argument('--model_path', type=str, default='../data/models/',
                     help='path to save model')
@@ -32,7 +32,7 @@ parser.add_argument('--model_name', type=str,
                     help='name of the saved model')
 parser.add_argument('--gamma', type=float, default=0.99,
                     help='discount factor for future rewards')
-parser.add_argument('--learning_rate', type=float, default=0.001,
+parser.add_argument('--learning_rate', type=float, default=0.0001,
                     help='learning rate')
 
 
@@ -78,7 +78,7 @@ if __name__=='__main__':
 
             # sample action from policy
             current_state_ = np.array(current_state, ndmin=2).reshape(1, -1)
-            action, log_pi = ppo.policy(current_state_)
+            action, log_pi, mu, sigma = ppo.policy(current_state_)
 
             action_ = action.numpy()[0]
             log_pi_ = log_pi.numpy()[0]
@@ -86,7 +86,7 @@ if __name__=='__main__':
             # Execute action, observe next state and reward
             next_state, reward, done, _ = env.step(action_)
             episode_reward += reward
-            transitions.append([current_state_, action_, log_pi_, reward,
+            transitions.append([current_state_, action_, log_pi_, mu, sigma, reward,
                                 next_state])
 
             current_state = next_state
