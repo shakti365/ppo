@@ -4,6 +4,7 @@ import logging
 import numpy as np
 from datetime import datetime
 import tensorflow as tf
+import json
 
 from ppo import PPOClipped
 from env import ContinuousCartPoleEnv
@@ -32,8 +33,14 @@ parser.add_argument('--model_name', type=str,
                     help='name of the saved model')
 parser.add_argument('--gamma', type=float, default=0.99,
                     help='discount factor for future rewards')
+parser.add_argument('--lambd', type=float, default=0.99,
+                    help='discount factor for future rewards')
 parser.add_argument('--learning_rate', type=float, default=0.0001,
                     help='learning rate')
+parser.add_argument('--epsilon', type=float, default=0.2,
+                    help='clipping value')
+parser.add_argument('--horizon', type=int, default=100,
+                    help='max step per episode to calculate TD return')
 
 
 if __name__=='__main__':
@@ -46,6 +53,10 @@ if __name__=='__main__':
 
     writer = tf.summary.create_file_writer(args.model_path + args.model_name + '/summary')
 
+    with open(args.model_path + args.model_name + '/param.json', 'w') as f:
+        f.write(json.dumps(args.__repr__()))
+
+
     # Instantiate the environment.
     if args.env_name == "ContinuousCartPoleEnv":
         env = ContinuousCartPoleEnv()
@@ -57,7 +68,8 @@ if __name__=='__main__':
     action_space = env.action_space.shape[0]
 
     # Initialize policy and value function parameters.
-    ppo = PPOClipped(writer, action_space)
+    ppo = PPOClipped(writer, action_space, learning_rate=args.learning_rate,
+                     epsilon=args.epsilon, gamma=args.gamma, lambd=args.lambd)
 
     # Reset global tracking variables
 
@@ -69,6 +81,7 @@ if __name__=='__main__':
         done = False
         episode_reward = 0.0
         transitions = []
+        episode_step = 0
 
         # Run an episode.
         while not done:
@@ -80,21 +93,38 @@ if __name__=='__main__':
             current_state_ = np.array(current_state, ndmin=2).reshape(1, -1)
             action, log_pi, mu, sigma = ppo.policy(current_state_)
 
-            action_ = action.numpy()[0]
+            action_ = np.clip(action.numpy()[0], -1, 1)
             log_pi_ = log_pi.numpy()[0]
 
             # Execute action, observe next state and reward
             next_state, reward, done, _ = env.step(action_)
             episode_reward += reward
+
+            if done:
+                not_terminal = 0
+            else:
+                not_terminal = 1
+
+            next_state_ = np.array(current_state, ndmin=2).reshape(1, -1)
             transitions.append([current_state_, action_, log_pi_, mu, sigma, reward,
-                                next_state])
+                                next_state_, not_terminal])
 
             current_state = next_state
+
+            episode_step += 1
+            if episode_step == args.horizon:
+                break
 
         print(f"Episode Reward: {episode_reward}")
 
         # Update policy and value function parameter.
-        policy_loss, value_loss = ppo.update(transitions)
+        policy_loss, value_loss = ppo.update(transitions, epoch)
+
+        # Log summaries
+        with writer.as_default():
+            tf.summary.scalar("policy_loss", policy_loss.numpy()[0][0], epoch)
+            tf.summary.scalar("value_loss", value_loss.numpy()[0][0], epoch)
+            tf.summary.scalar("episode_reward", episode_reward, epoch)
 
         # If the KL divergence between the old and new policy crosses threshold
         # then do early stoppping.
