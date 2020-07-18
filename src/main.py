@@ -22,8 +22,6 @@ parser.add_argument('--render', type=bool, default=False,
                     help='set gym environment to render display')
 parser.add_argument('--verbose', type=bool, default=False,
                     help='log execution details')
-parser.add_argument('--batch_size', type=int, default=64,
-                    help='minibatch sample size for training')
 parser.add_argument('--epochs', type=int, default=100,
                     help='number of epochs to run backprop in an episode')
 parser.add_argument('--model_path', type=str, default='../data/models/',
@@ -93,7 +91,10 @@ if __name__=='__main__':
             current_state_ = np.array(current_state, ndmin=2).reshape(1, -1)
             action, log_pi, mu, sigma = ppo.policy(current_state_)
 
-            action_ = np.clip(action.numpy()[0], -1, 1)
+            if args.env_name == "ContinuousCartPoleEnv":
+                action_ = np.clip(action.numpy()[0], -1, 1)
+            else:
+                action_ = action.numpy()[0]
             log_pi_ = log_pi.numpy()[0]
 
             # Execute action, observe next state and reward
@@ -105,9 +106,16 @@ if __name__=='__main__':
             else:
                 not_terminal = 1
 
-            next_state_ = np.array(current_state, ndmin=2).reshape(1, -1)
+            next_state_ = np.array(next_state, ndmin=2).reshape(1, -1)
             transitions.append([current_state_, action_, log_pi_, mu, sigma, reward,
                                 next_state_, not_terminal])
+
+            if args.verbose:
+                logging.info(f"""\
+                             current_state: {current_state_}\n\
+                             action: {action_}\n\
+                             reward: {reward}\n\
+                             next_state: {next_state_}\n""")
 
             current_state = next_state
 
@@ -115,15 +123,13 @@ if __name__=='__main__':
             if episode_step == args.horizon:
                 break
 
-        print(f"Episode Reward: {episode_reward}")
-
         # Update policy and value function parameter.
         policy_loss, value_loss = ppo.update(transitions, epoch)
 
         # Log summaries
         with writer.as_default():
-            tf.summary.scalar("policy_loss", policy_loss.numpy()[0][0], epoch)
-            tf.summary.scalar("value_loss", value_loss.numpy()[0][0], epoch)
+            tf.summary.scalar("policy_loss", policy_loss.numpy(), epoch)
+            tf.summary.scalar("value_loss", value_loss.numpy(), epoch)
             tf.summary.scalar("episode_reward", episode_reward, epoch)
 
         # If the KL divergence between the old and new policy crosses threshold
@@ -133,6 +139,8 @@ if __name__=='__main__':
         print(f"Epoch: {epoch}")
         print(f"Policy Loss: {policy_loss}")
         print(f"Value Loss: {value_loss}")
+        print(f"Episode Reward: {episode_reward}")
 
         # Save model.
+        ppo.policy.save_weights(args.model_path + args.model_name + '/model')
 

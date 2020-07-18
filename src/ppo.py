@@ -18,7 +18,7 @@ class Actor(Model):
         self.hidden_layers = [layers.Dense(layer, activation=tf.nn.relu) for layer in hidden_dims]
         self.mean_layer = layers.Dense(self.output_dim)
         # Standard deviation doesn't depend on state
-        self.log_stddev = tf.Variable(initial_value=0.0, trainable=True,
+        self.log_stddev = tf.Variable(initial_value=1.0, trainable=True,
                                       dtype=tf.float64)
 
     def call(self, state, action=None):
@@ -61,7 +61,7 @@ class Critic(Model):
     def __init__(self, hidden_dims):
         super().__init__()
         self.hidden_layers = [layers.Dense(layer, activation=tf.nn.relu) for layer in hidden_dims]
-        self.output_layer = layers.Dense(1, activation=tf.nn.relu)
+        self.output_layer = layers.Dense(1)
 
     def call(self, state):
         # Pass input through all hidden layers
@@ -104,8 +104,8 @@ class PPOClipped:
         self.lambd = lambd
         self.epsilon = epsilon
 
-        self.policy_optimizer = tf.keras.optimizers.RMSprop(learning_rate)
-        self.value_optimizer = tf.keras.optimizers.RMSprop(learning_rate)
+        self.policy_optimizer = tf.keras.optimizers.Adam(learning_rate)
+        self.value_optimizer = tf.keras.optimizers.Adam(learning_rate)
 
     def update(self, transitions, epoch):
         """Does a backprop on policy and value networks"""
@@ -113,11 +113,8 @@ class PPOClipped:
         with tf.GradientTape(watch_accessed_variables=True, persistent=True) as tape:
 
             R = 0.0
-            policy_loss = 0.0
             policy_loss_ = []
-            value_loss = 0.0
             value_loss_ = []
-            num_samples = 0.0
             advantage = 0
             for transition in reversed(transitions):
                 current_state, action, log_pi_old, _, _, reward, next_state, done = transition
@@ -142,26 +139,27 @@ class PPOClipped:
                                   lambda: tf.multiply(1-self.epsilon, advantage),
                                   lambda: tf.multiply(1+self.epsilon, advantage))
 
-                policy_loss -= tf.math.minimum(clipped, unclipped)
-                value_loss += tf.pow(V_s - R, 2)
-                num_samples = 1
+                policy_loss_.append(tf.math.minimum(clipped, unclipped))
+                value_loss_.append(tf.pow(V_s - R, 2))
 
-            value_objective = (1/num_samples) * value_loss
-            policy_objective = (1/num_samples) * policy_loss
+
+            policy_loss = tf.reduce_mean(policy_loss_)
+            value_loss = tf.reduce_mean(value_loss_)
+            value_objective = value_loss
+            policy_objective = - policy_loss
 
         policy_vars = self.policy.trainable_variables
-        policy_grads = [tf.clip_by_value(grad, -1, 1) for grad in
-                        tape.gradient(policy_objective, policy_vars)]
+        policy_grads = tape.gradient(policy_objective, policy_vars)
         self.policy_optimizer.apply_gradients(zip(policy_grads, policy_vars))
 
         with self.writer.as_default():
+            tf.summary.scalar("advantage", advantage.numpy()[0][0], epoch)
             for var, grad in zip(policy_vars, policy_grads):
                 tf.summary.histogram(f"policy_grad-{var.name}", grad, epoch)
                 tf.summary.histogram(f"policy_var-{var.name}", var, epoch)
 
         value_vars = self.value.trainable_variables
-        value_grads = [tf.clip_by_value(grad, -1, 1) for grad in
-                       tape.gradient(value_objective, value_vars)]
+        value_grads = tape.gradient(value_objective, value_vars)
         self.value_optimizer.apply_gradients(zip(value_grads, value_vars))
 
         with self.writer.as_default():
